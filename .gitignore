@@ -11,6 +11,14 @@
 /node_modules
 npm-debug.log
 yarn-error.log
+yarn-debug.log*
+
+# Environment files
+/.env
+/.env.*
+
+# TypeScript cache
+*.tsbuildinfo
 
 # IDEs and editors
 .idea/
@@ -31,9 +39,11 @@ yarn-error.log
 
 # Miscellaneous
 /.angular/cache
+.angular/
 .sass-cache/
 /connect.lock
 /coverage
+/e2e/test-output/
 /libpeerconnection.log
 testem.log
 /typings
