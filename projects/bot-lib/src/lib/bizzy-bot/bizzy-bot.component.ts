@@ -1,3 +1,4 @@
+import { HttpClient } from '@angular/common/http';
 import {
   Component,
   ElementRef,
@@ -17,6 +18,17 @@ import {
   mergeBizzyBotWidgetConfig,
   parseBizzyBotConfigInput,
 } from '../config/bizzy-bot-widget-config';
+
+/** Agent query endpoint (Cloud Run). */
+export const BIZZY_BOT_AGENT_QUERY_URL =
+  'https://service-agentic-x-git-1067454512065.europe-west1.run.app/agent/query';
+
+/** Hardcoded user id until auth is wired. */
+export const BIZZY_BOT_AGENT_USER_ID = '1';
+
+/** Default `query` when the API is called right after a successful file upload. */
+export const BIZZY_BOT_AGENT_UPLOAD_QUERY =
+  'What can you extract or tell me about this document?';
 
 /** Default header icon when `brandIconUrl` is not set in config. */
 const DEFAULT_BRAND_ICON_SRC =
@@ -109,6 +121,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   messageInput = '';
   private botReplyTimer?: ReturnType<typeof setTimeout>;
   private uploadProgressTimers: ReturnType<typeof setTimeout>[] = [];
+  /** Latest successful file upload (used as payslip on next `handleSendMessage`). */
+  private lastPayslipAttachment: { mimeType: string; base64Payload: string } | null = null;
   /** Reject reads above this size (base64 ~33% larger in memory). */
   private readonly maxUploadBytes = 20 * 1024 * 1024;
   private speechRecognition?: BrowserSpeechRecognition;
@@ -119,7 +133,11 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   @ViewChild('chatContainer') chatContainer?: ElementRef<HTMLDivElement>;
   @ViewChild('fileInputEl') fileInputEl?: ElementRef<HTMLInputElement>;
 
-  constructor(private readonly ngZone: NgZone, private readonly host: ElementRef<HTMLElement>) {
+  constructor(
+    private readonly ngZone: NgZone,
+    private readonly host: ElementRef<HTMLElement>,
+    private readonly http: HttpClient
+  ) {
     this.voiceInputSupported = this.ensureSpeechRecognition();
   }
 
@@ -351,8 +369,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   /**
-   * Reads file as a data URL (`data:<mime>;base64,...`) and attaches parsed fields to the message.
-   * Call your API with `mimeType`, `base64Payload`, and `fileName` when `state === 'done'`.
+   * Reads file as a data URL (`data:<mime>;base64,...`), marks upload done, remembers
+   * payslip MIME/base64 for follow-up sends, and POSTs to the agent immediately.
    */
   private encodeFileToBase64(file: File, messageIndex: number): void {
     this.convertFileToDataUrl(file)
@@ -364,7 +382,6 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
             return;
           }
           const { mimeType, base64Payload } = BizzyBotComponent.parseDataUrl(dataUrl);
-          console.log('File uploaded — MIME:', mimeType, '| Base64:', base64Payload);
           msg.fileUpload = {
             ...msg.fileUpload,
             state: 'done',
@@ -373,7 +390,9 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
             mimeType,
             base64Payload
           };
+          this.lastPayslipAttachment = { mimeType, base64Payload };
           this.scrollToBottom();
+          this.postAgentQuery(BIZZY_BOT_AGENT_UPLOAD_QUERY, mimeType, base64Payload);
         });
       })
       .catch(() => {
@@ -591,7 +610,7 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
       this.addMessage(message, true);
     }
     this.messageInput = '';
-    this.simulateBotResponse(message);
+    this.fetchAgentReply(message);
   }
 
   reloadChat(): void {
@@ -602,6 +621,7 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     }
     this.isTyping = false;
     this.messageInput = '';
+    this.lastPayslipAttachment = null;
     this.resetWelcomeMessage();
     this.isToolsOpen = false;
     this.openBubbleMenuIndex = null;
@@ -645,32 +665,85 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     return null;
   }
 
-  private simulateBotResponse(userMessage: string): void {
-    const responseDelay = Math.floor(Math.random() * 1000) + 1500;
+  private fetchAgentReply(userQuery: string): void {
+    this.postAgentQuery(
+      userQuery,
+      this.lastPayslipAttachment?.mimeType ?? '',
+      this.lastPayslipAttachment?.base64Payload ?? ''
+    );
+  }
 
+  /** POST `/agent/query` with optional payslip payload (used after upload and on send). */
+  private postAgentQuery(query: string, payslipMimeType: string, payslipBase64: string): void {
+    if (this.botReplyTimer) {
+      clearTimeout(this.botReplyTimer);
+      this.botReplyTimer = undefined;
+    }
     this.isTyping = true;
     this.scrollToBottom();
 
-    this.botReplyTimer = setTimeout(() => {
-      this.isTyping = false;
-      if (Math.random() < 0.22) {
-        this.messages.push({
-          content: 'You may find this resource useful:',
-          isUser: false,
-          linkUrl: 'https://www.biz2credit.com',
-          linkTitle: 'Biz2Credit — small business financing'
+    const body = {
+      userId: BIZZY_BOT_AGENT_USER_ID,
+      query,
+      payslipMimeType,
+      payslipBase64,
+    };
+
+    this.http.post<unknown>(BIZZY_BOT_AGENT_QUERY_URL, body).subscribe({
+      next: (res) => {
+        this.ngZone.run(() => {
+          this.isTyping = false;
+          this.addMessage(this.extractAgentReplyText(res));
+          this.scrollToBottom();
         });
-      } else {
-        const responses = [
-          `I understand you're asking about "${userMessage}". Could you elaborate?`,
-          `That is an interesting point about "${userMessage}". Let me help you with that.`,
-          `I have analyzed your message about "${userMessage}". Here is what I think...`
-        ];
-        this.addMessage(responses[Math.floor(Math.random() * responses.length)]);
+      },
+      error: (err: { error?: { message?: string }; message?: string }) => {
+        this.ngZone.run(() => {
+          this.isTyping = false;
+          const raw = err?.error?.message ?? err?.message;
+          const text =
+            typeof raw === 'string' && raw.trim()
+              ? raw
+              : 'Could not reach the agent. Check your connection or try again.';
+          this.addMessage(text);
+          this.scrollToBottom();
+        });
+      },
+    });
+  }
+
+  /** Normalize agent JSON (or plain text) into a single assistant bubble string. */
+  private extractAgentReplyText(body: unknown): string {
+    if (body == null) {
+      return '';
+    }
+    if (typeof body === 'string') {
+      return body;
+    }
+    if (typeof body !== 'object') {
+      return String(body);
+    }
+    const o = body as Record<string, unknown>;
+    for (const key of [
+      'answer',
+      'message',
+      'response',
+      'text',
+      'reply',
+      'result',
+      'data',
+      'output',
+    ]) {
+      const v = o[key];
+      if (typeof v === 'string' && v.trim()) {
+        return v;
       }
-      this.scrollToBottom();
-      this.botReplyTimer = undefined;
-    }, responseDelay);
+    }
+    try {
+      return JSON.stringify(body);
+    } catch {
+      return 'Received a response from the agent.';
+    }
   }
 
   private scrollToBottom(): void {

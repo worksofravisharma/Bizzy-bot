@@ -17,6 +17,12 @@ Angular **14** workspace structured like the registration widget: a reusable **l
 - `npm run build:lib` — build the library package
 - `npm run build:element` — production build of **bot-element** with stable chunk names, then `node build.js` → **`build/`**
 - `npm run build:bundle` — run `build.js` only (expects `dist/bot-element` already built)
+- `npm run test:lib` — **bot-lib** unit tests (Karma + Jasmine, Chrome Headless, single run)
+- `ng test --project=bot-lib` — same tests in watch mode (default browser: Chrome)
+
+## Unit tests (bot-lib)
+
+Specs live under `projects/bot-lib/src/lib/**`. They cover widget **config merge/parse** and **BizzyBotComponent** (welcome message, theme CSS variables, `widgets` toggles, send/reload, feedback, file-upload helpers).
 
 ## Embed (host page)
 

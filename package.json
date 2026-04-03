@@ -11,7 +11,8 @@
     "build:element": "ng build --configuration=production --project=bot-element --build-optimizer --named-chunks=true --output-hashing=none && node build.js",
     "build:bundle": "node build.js",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "test:lib": "ng test --project=bot-lib --no-watch --browsers=ChromeHeadless"
   },
   "private": true,
   "dependencies": {
