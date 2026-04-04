@@ -1,0 +1,7 @@
+/*
+ * Public API Surface of bot-lib
+ */
+export * from './lib/bot-lib.module';
+export * from './lib/bizzy-bot/bizzy-bot.component';
+export * from './lib/config/bizzy-bot-widget-config';
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoicHVibGljLWFwaS5qcyIsInNvdXJjZVJvb3QiOiIiLCJzb3VyY2VzIjpbIi4uLy4uLy4uL3Byb2plY3RzL2JvdC1saWIvc3JjL3B1YmxpYy1hcGkudHMiXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IkFBQUE7O0dBRUc7QUFDSCxjQUFjLHNCQUFzQixDQUFDO0FBQ3JDLGNBQWMscUNBQXFDLENBQUM7QUFDcEQsY0FBYyxzQ0FBc0MsQ0FBQyIsInNvdXJjZXNDb250ZW50IjpbIi8qXG4gKiBQdWJsaWMgQVBJIFN1cmZhY2Ugb2YgYm90LWxpYlxuICovXG5leHBvcnQgKiBmcm9tICcuL2xpYi9ib3QtbGliLm1vZHVsZSc7XG5leHBvcnQgKiBmcm9tICcuL2xpYi9iaXp6eS1ib3QvYml6enktYm90LmNvbXBvbmVudCc7XG5leHBvcnQgKiBmcm9tICcuL2xpYi9jb25maWcvYml6enktYm90LXdpZGdldC1jb25maWcnO1xuIl19
