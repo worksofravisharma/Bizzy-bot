@@ -10,10 +10,9 @@ const build = async () => {
   ];
 
   console.log('files', files);
+  // Avoid `fs.rm(./build)` here: on Windows + OneDrive, rmdir on `build/assets` often throws EPERM.
   await fs.ensureDir('./build');
-
-  await fs.rm('./build', { recursive: true });
-  await fs.mkdir('./build');
+  await fs.ensureDir('./build/assets');
 
   await fs.copyFile('./dist/bot-element/runtime.js', './build/runtime.js');
   await fs.copyFile('./dist/bot-element/polyfills.js', './build/polyfills.js');
@@ -36,9 +35,8 @@ const build = async () => {
   await fs.copyFile('./template/index.html', './build/index.html');
   await fs.copyFile('./template/widget-loader.js', './build/widget-loader.js');
 
-  await fs.ensureDir('./build/assets');
   if (await fs.pathExists('./dist/bot-element/assets')) {
-    await fs.copy('./dist/bot-element/assets/', './build/assets/');
+    await fs.copy('./dist/bot-element/assets/', './build/assets/', { overwrite: true });
   }
 };
 

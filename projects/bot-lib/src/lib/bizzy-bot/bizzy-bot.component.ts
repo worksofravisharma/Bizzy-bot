@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
 import {
   Component,
   ElementRef,
@@ -19,9 +19,7 @@ import {
   parseBizzyBotConfigInput,
 } from '../config/bizzy-bot-widget-config';
 
-/** Agent query endpoint (Cloud Run). */
-export const BIZZY_BOT_AGENT_QUERY_URL =
-  'https://service-agentic-x-git-1067454512065.europe-west1.run.app/agent/query';
+
 
 /** Hardcoded user id until auth is wired. */
 export const BIZZY_BOT_AGENT_USER_ID = '1';
@@ -29,6 +27,22 @@ export const BIZZY_BOT_AGENT_USER_ID = '1';
 /** Default `query` when the API is called right after a successful file upload. */
 export const BIZZY_BOT_AGENT_UPLOAD_QUERY =
   'What can you extract or tell me about this document?';
+
+/** Shown in the chat bubble when the agent request fails (raw API / network errors are not shown). */
+const BIZZY_BOT_AGENT_ERROR_USER_MESSAGE =
+  "We're having trouble completing that request. Please try again in a moment.";
+
+/** Local feedback service (thumbs up / down). */
+export const BIZZY_BOT_FEEDBACK_API_BASE = 'https://service-agentic-x-git-1067454512065.europe-west1.run.app';
+
+/** Agent query endpoint (Cloud Run). */
+export const BIZZY_BOT_AGENT_QUERY_URL =
+  `${BIZZY_BOT_FEEDBACK_API_BASE}/agent/query`;
+
+export const BIZZY_BOT_FEEDBACK_URL = `${BIZZY_BOT_FEEDBACK_API_BASE}/feedback`;
+
+/** GET `/ping` on the same host as {@link BIZZY_BOT_FEEDBACK_URL} (optional health check). */
+export const BIZZY_BOT_FEEDBACK_PING_URL = `${BIZZY_BOT_FEEDBACK_API_BASE}/ping`;
 
 /** Default header icon when `brandIconUrl` is not set in config. */
 const DEFAULT_BRAND_ICON_SRC =
@@ -52,12 +66,19 @@ type ChatMessage = {
   content: string;
   isUser: boolean;
   feedback?: 'up' | 'down';
+  /**
+   * Set for assistant bubbles produced by the agent: exact context sent to POST /feedback
+   * (`query` = user text + optional file line; `response` = this reply text).
+   */
+  feedbackTurn?: { query: string; response: string };
   /** When set, bubble shows file card + upload progress instead of plain text. */
   fileUpload?: FileUploadMeta;
   /** When set, bubble uses link-card layout (distinct from plain text). */
   linkUrl?: string;
   /** Optional label shown above the URL (e.g. page title). */
   linkTitle?: string;
+  /** Welcome bubble from config: hide ⋮ / thumbs / copy on this message only. */
+  suppressBotBubbleActions?: boolean;
 };
 
 type BrowserSpeechRecognition = {
@@ -87,6 +108,8 @@ type SpeechRecognitionEventLite = {
   styleUrls: ['./bizzy-bot.component.scss']
 })
 export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
+  private static readonly SESSION_ACCESS_TOKEN_KEY = 'access_token';
+
   /** JSON string or object: merged over {@link BIZZY_BOT_DEFAULT_WIDGET_CONFIG} (see `bizzy-bot-default.config.json`). */
   @Input() config: string | BizzyBotWidgetConfig | null | undefined = null;
 
@@ -109,6 +132,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   };
 
   isChatOpen = false;
+  /** Shown in the header while the panel is open; updated via GET `BIZZY_BOT_FEEDBACK_PING_URL`. */
+  backendConnectionStatus: 'checking' | 'online' | 'offline' = 'offline';
   isDarkTheme = false;
   isTyping = false;
   isToolsOpen = false;
@@ -128,6 +153,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   private speechRecognition?: BrowserSpeechRecognition;
   /** Finalized speech for the current mic session; applied to the input on stop. */
   private speechSessionAccumulated = '';
+  /** Bumped when the panel closes or a new ping starts so stale HTTP callbacks are ignored. */
+  private pingGeneration = 0;
   messages: ChatMessage[] = [];
 
   @ViewChild('chatContainer') chatContainer?: ElementRef<HTMLDivElement>;
@@ -214,22 +241,80 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   private resetWelcomeMessage(): void {
     const text =
       this.widgetConfig.welcomeMessage ?? BIZZY_BOT_DEFAULT_WIDGET_CONFIG.welcomeMessage ?? '';
-    this.messages = [{ content: text, isUser: false }];
+    this.messages = [{ content: text, isUser: false, suppressBotBubbleActions: true }];
   }
 
   toggleChat(): void {
     this.isChatOpen = !this.isChatOpen;
     if (!this.isChatOpen) {
+      this.pingGeneration += 1;
       this.isToolsOpen = false;
       this.openBubbleMenuIndex = null;
+    } else {
+      this.runBackendPing();
     }
     setTimeout(() => this.scrollToBottom(), 0);
   }
 
   closeChat(): void {
     this.isChatOpen = false;
+    this.pingGeneration += 1;
     this.isToolsOpen = false;
     this.openBubbleMenuIndex = null;
+  }
+
+  /** GET `/ping` when the chat panel opens (or after reload) for header online / offline. */
+  private runBackendPing(): void {
+    this.pingGeneration += 1;
+    const gen = this.pingGeneration;
+    this.backendConnectionStatus = 'checking';
+
+    this.http
+      .get(BIZZY_BOT_FEEDBACK_PING_URL, {
+        observe: 'response',
+        responseType: 'text',
+        headers: this.getBearerAuthHttpHeaders(),
+      })
+      .subscribe({
+        next: (res) => {
+          if (!this.isChatOpen || gen !== this.pingGeneration) {
+            return;
+          }
+          const ok = res.status >= 200 && res.status < 300;
+          this.ngZone.run(() => {
+            this.backendConnectionStatus = ok ? 'online' : 'offline';
+          });
+        },
+        error: () => {
+          if (!this.isChatOpen || gen !== this.pingGeneration) {
+            return;
+          }
+          this.ngZone.run(() => {
+            this.backendConnectionStatus = 'offline';
+          });
+        },
+      });
+  }
+
+  /**
+   * If `sessionStorage` has `access_token`, send `Authorization: Bearer …` on API calls.
+   * Read on each request so a token set after load is used on the next call.
+   */
+  private getBearerAuthHttpHeaders(): HttpHeaders {
+    if (typeof sessionStorage === 'undefined') {
+      return new HttpHeaders();
+    }
+    try {
+      const t = sessionStorage
+        .getItem(BizzyBotComponent.SESSION_ACCESS_TOKEN_KEY)
+        ?.trim();
+      if (t) {
+        return new HttpHeaders({ Authorization: `Bearer ${t}` });
+      }
+    } catch {
+      /* storage blocked or unavailable */
+    }
+    return new HttpHeaders();
   }
 
   toggleTheme(): void {
@@ -280,8 +365,37 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     if (!msg || msg.isUser) {
       return;
     }
-    msg.feedback = msg.feedback === value ? undefined : value;
+    const prev = msg.feedback;
+    const next = prev === value ? undefined : value;
+    msg.feedback = next;
     this.closeBubbleMenu();
+
+    if (next === undefined) {
+      return;
+    }
+
+    const rating = next === 'up' ? 1 : 0;
+    const uid = Number(BIZZY_BOT_AGENT_USER_ID);
+    const query =
+      msg.feedbackTurn?.query ?? this.inferFeedbackQueryFromPriorMessages(index);
+    const response =
+      msg.feedbackTurn?.response ?? this.botMessageFeedbackResponseText(msg);
+
+    this.http
+      .post(
+        BIZZY_BOT_FEEDBACK_URL,
+        {
+          userId: Number.isFinite(uid) ? uid : 1,
+          query,
+          response,
+          rating,
+        },
+        { headers: this.getBearerAuthHttpHeaders() }
+      )
+      .subscribe({
+        next: () => {},
+        error: () => {},
+      });
   }
 
   async copyBotMessageFromMenu(message: ChatMessage): Promise<void> {
@@ -392,7 +506,12 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
           };
           this.lastPayslipAttachment = { mimeType, base64Payload };
           this.scrollToBottom();
-          this.postAgentQuery(BIZZY_BOT_AGENT_UPLOAD_QUERY, mimeType, base64Payload);
+          this.postAgentQuery(
+            BIZZY_BOT_AGENT_UPLOAD_QUERY,
+            mimeType,
+            base64Payload,
+            msg.fileUpload.fileName
+          );
         });
       })
       .catch(() => {
@@ -626,6 +745,9 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     this.isToolsOpen = false;
     this.openBubbleMenuIndex = null;
     this.scrollToBottom();
+    if (this.isChatOpen) {
+      this.runBackendPing();
+    }
   }
 
   private addMessage(content: string, isUser = false): void {
@@ -673,14 +795,32 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     );
   }
 
-  /** POST `/agent/query` with optional payslip payload (used after upload and on send). */
-  private postAgentQuery(query: string, payslipMimeType: string, payslipBase64: string): void {
+  /**
+   * POST `/agent/query` with optional payslip payload (used after upload and on send).
+   * @param feedbackFileLabel File name for feedback `query` when a payslip is attached.
+   */
+  private postAgentQuery(
+    query: string,
+    payslipMimeType: string,
+    payslipBase64: string,
+    feedbackFileLabel?: string
+  ): void {
     if (this.botReplyTimer) {
       clearTimeout(this.botReplyTimer);
       this.botReplyTimer = undefined;
     }
     this.isTyping = true;
     this.scrollToBottom();
+
+    const fileLabel =
+      feedbackFileLabel ??
+      (payslipBase64 ? this.findLatestCompletedUploadFileName() : undefined);
+    const feedbackQuery = BizzyBotComponent.buildAgentFeedbackQueryLabel(
+      query,
+      payslipMimeType,
+      payslipBase64,
+      fileLabel
+    );
 
     const body = {
       userId: BIZZY_BOT_AGENT_USER_ID,
@@ -689,27 +829,114 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
       payslipBase64,
     };
 
-    this.http.post<unknown>(BIZZY_BOT_AGENT_QUERY_URL, body).subscribe({
+    this.http
+      .post<unknown>(BIZZY_BOT_AGENT_QUERY_URL, body, {
+        headers: this.getBearerAuthHttpHeaders(),
+      })
+      .subscribe({
       next: (res) => {
         this.ngZone.run(() => {
           this.isTyping = false;
-          this.addMessage(this.extractAgentReplyText(res));
+          const text = this.extractAgentReplyText(res);
+          this.addBotAgentMessage(text, { query: feedbackQuery, response: text });
           this.scrollToBottom();
         });
       },
-      error: (err: { error?: { message?: string }; message?: string }) => {
+      error: () => {
         this.ngZone.run(() => {
           this.isTyping = false;
-          const raw = err?.error?.message ?? err?.message;
-          const text =
-            typeof raw === 'string' && raw.trim()
-              ? raw
-              : 'Could not reach the agent. Check your connection or try again.';
-          this.addMessage(text);
+          this.addBotAgentMessage(BIZZY_BOT_AGENT_ERROR_USER_MESSAGE, {
+            query: feedbackQuery,
+            response: BIZZY_BOT_AGENT_ERROR_USER_MESSAGE,
+          });
           this.scrollToBottom();
         });
       },
     });
+  }
+
+  private addBotAgentMessage(
+    content: string,
+    feedbackTurn: { query: string; response: string }
+  ): void {
+    this.messages.push({ content, isUser: false, feedbackTurn });
+    this.scrollToBottom();
+  }
+
+  /** Human-readable `query` field for POST /feedback (user text + optional file line, no base64). */
+  private static buildAgentFeedbackQueryLabel(
+    query: string,
+    payslipMimeType: string,
+    payslipBase64: string,
+    fileDisplayName?: string
+  ): string {
+    const parts: string[] = [];
+    const q = query.trim();
+    if (q) {
+      parts.push(q);
+    }
+    if (payslipBase64?.trim()) {
+      const mime = payslipMimeType?.trim() || 'application/octet-stream';
+      const name = fileDisplayName?.trim() || 'document';
+      parts.push(`Attached file: ${name} (${mime})`);
+    }
+    const s = parts.join('\n\n').trim();
+    return s || '(empty query)';
+  }
+
+  private findLatestCompletedUploadFileName(): string | undefined {
+    for (let j = this.messages.length - 1; j >= 0; j -= 1) {
+      const m = this.messages[j];
+      if (!m.isUser) {
+        continue;
+      }
+      if (m.fileUpload?.state === 'done') {
+        return m.fileUpload.fileName;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Fallback when `feedbackTurn` is missing (e.g. welcome): walk back user bubbles before this bot message.
+   */
+  private inferFeedbackQueryFromPriorMessages(botMessageIndex: number): string {
+    const parts: string[] = [];
+    for (let i = botMessageIndex - 1; i >= 0; i -= 1) {
+      const m = this.messages[i];
+      if (!m.isUser) {
+        break;
+      }
+      if (m.fileUpload?.state === 'done') {
+        const fn = m.fileUpload.fileName;
+        const mt = m.fileUpload.mimeType ?? 'application/octet-stream';
+        parts.unshift(`Attached file: ${fn} (${mt})`);
+      }
+      const t = m.content?.trim();
+      if (t) {
+        parts.unshift(t);
+      }
+      if (m.linkUrl) {
+        parts.unshift(m.linkUrl);
+      }
+    }
+    return parts.length ? parts.join('\n\n') : '(no preceding user message)';
+  }
+
+  /** Plain text for feedback `response` (link cards, etc.). */
+  private botMessageFeedbackResponseText(message: ChatMessage): string {
+    const parts: string[] = [];
+    if (message.linkUrl) {
+      if (message.linkTitle?.trim()) {
+        parts.push(message.linkTitle.trim());
+      }
+      parts.push(message.linkUrl);
+    }
+    const body = message.content?.trim() ?? '';
+    if (body && (!message.linkUrl || body !== message.linkUrl)) {
+      parts.push(body);
+    }
+    return parts.join('\n').trim() || message.content?.trim() || '';
   }
 
   /** Normalize agent JSON (or plain text) into a single assistant bubble string. */

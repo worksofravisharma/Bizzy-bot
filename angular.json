@@ -178,6 +178,7 @@
           "builder": "@angular-devkit/build-angular:browser",
           "options": {
             "outputPath": "dist/bot-element",
+            "deleteOutputPath": false,
             "index": "projects/bot-element/src/index.html",
             "main": "projects/bot-element/src/main.ts",
             "polyfills": "projects/bot-element/src/polyfills.ts",

@@ -22,7 +22,27 @@
         <h1 class="brand-title">
           <img class="brand-title__icon" [src]="brandIconSrc" [alt]="widgetConfig.brandName || 'Assistant'" />
           <span class="brand-title__text">
-            <span class="brand-title__name">{{ widgetConfig.brandName }}</span>
+            <span class="brand-title__name-row">
+              <span class="brand-title__name">{{ widgetConfig.brandName }}</span>
+              <span
+                class="brand-status"
+                role="status"
+                [ngClass]="{
+                  'brand-status--online': backendConnectionStatus === 'online',
+                  'brand-status--offline': backendConnectionStatus === 'offline',
+                  'brand-status--checking': backendConnectionStatus === 'checking'
+                }"
+                [attr.aria-label]="
+                  backendConnectionStatus === 'checking'
+                    ? 'Checking connection'
+                    : backendConnectionStatus === 'online'
+                      ? 'Service online'
+                      : 'Service offline'
+                "
+              >
+                <span class="brand-status__dot" aria-hidden="true"></span>
+              </span>
+            </span>
             <span class="brand-title__tagline">{{ widgetConfig.brandTagline }}</span>
           </span>
         </h1>
@@ -71,7 +91,10 @@
             [class.message-bubble--file]="message.fileUpload"
             [class.message-bubble--link]="message.linkUrl && !message.fileUpload"
           >
-            <div *ngIf="!message.isUser && ui.showBubbleMenu" class="bubble-menu">
+            <div
+              *ngIf="!message.isUser && ui.showBubbleMenu && !message.suppressBotBubbleActions"
+              class="bubble-menu"
+            >
               <button
                 type="button"
                 class="bubble-menu__trigger"
@@ -108,7 +131,7 @@
               </div>
             </div>
             <button
-              *ngIf="!message.isUser && ui.showCopyButton"
+              *ngIf="!message.isUser && ui.showCopyButton && !message.suppressBotBubbleActions"
               class="copy-message-btn"
               type="button"
               aria-label="Copy message"

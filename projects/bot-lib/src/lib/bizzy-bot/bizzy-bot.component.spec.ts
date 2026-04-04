@@ -7,6 +7,8 @@ import { BIZZY_BOT_DEFAULT_WIDGET_CONFIG } from '../config/bizzy-bot-widget-conf
 import {
   BIZZY_BOT_AGENT_QUERY_URL,
   BIZZY_BOT_AGENT_USER_ID,
+  BIZZY_BOT_FEEDBACK_PING_URL,
+  BIZZY_BOT_FEEDBACK_URL,
   BizzyBotComponent,
 } from './bizzy-bot.component';
 
@@ -89,16 +91,23 @@ describe('BizzyBotComponent', () => {
     expect(hostFixture.debugElement.query(By.css('.chat-fab'))).toBeNull();
   });
 
-  it('should toggle chat open state', fakeAsync(() => {
+  it('should toggle chat open state and ping backend when opening', fakeAsync(() => {
+    const httpMock = TestBed.inject(HttpTestingController);
     createHost();
     hostFixture.detectChanges();
     expect(bot.isChatOpen).toBe(false);
     bot.toggleChat();
     expect(bot.isChatOpen).toBe(true);
+    expect(bot.backendConnectionStatus).toBe('checking');
+    const pingReq = httpMock.expectOne(BIZZY_BOT_FEEDBACK_PING_URL);
+    expect(pingReq.request.method).toBe('GET');
+    pingReq.flush('ok', { status: 200, statusText: 'OK' });
     tick();
+    expect(bot.backendConnectionStatus).toBe('online');
     bot.toggleChat();
     expect(bot.isChatOpen).toBe(false);
     tick();
+    httpMock.verify();
   }));
 
   it('should close chat and reset tools state', () => {
@@ -126,6 +135,7 @@ describe('BizzyBotComponent', () => {
 
     const req = httpMock.expectOne(BIZZY_BOT_AGENT_QUERY_URL);
     expect(req.request.method).toBe('POST');
+    expect(req.request.headers.get('Authorization')).toBeNull();
     expect(req.request.body).toEqual({
       userId: BIZZY_BOT_AGENT_USER_ID,
       query: 'hello',
@@ -137,6 +147,22 @@ describe('BizzyBotComponent', () => {
     expect(bot.isTyping).toBe(false);
     expect(bot.messages[bot.messages.length - 1].content).toBe('Hi from agent');
     expect(bot.messages[bot.messages.length - 1].isUser).toBe(false);
+    httpMock.verify();
+  });
+
+  it('should send Authorization Bearer when sessionStorage has access_token', () => {
+    const httpMock = TestBed.inject(HttpTestingController);
+    spyOn(window.sessionStorage, 'getItem').and.callFake((key: string) =>
+      key === 'access_token' ? 'test-jwt' : null
+    );
+    createHost();
+    hostFixture.detectChanges();
+    bot.messageInput = 'ping';
+    bot.handleSendMessage();
+    const req = httpMock.expectOne(BIZZY_BOT_AGENT_QUERY_URL);
+    expect(req.request.headers.get('Authorization')).toBe('Bearer test-jwt');
+    req.flush({ answer: 'ok' });
+    hostFixture.detectChanges();
     httpMock.verify();
   });
 
@@ -169,14 +195,56 @@ describe('BizzyBotComponent', () => {
     expect(bot.isDarkTheme).toBe(true);
   });
 
-  it('setBotFeedback should set feedback on bot messages only', () => {
+  it('setBotFeedback should set feedback on bot messages only and POST /feedback', () => {
+    const httpMock = TestBed.inject(HttpTestingController);
     createHost();
     hostFixture.detectChanges();
     bot.setBotFeedback(0, 'up');
     expect(bot.messages[0].feedback).toBe('up');
+    const fbUp = httpMock.expectOne(BIZZY_BOT_FEEDBACK_URL);
+    expect(fbUp.request.method).toBe('POST');
+    expect(fbUp.request.body).toEqual(
+      jasmine.objectContaining({
+        userId: 1,
+        query: '(no preceding user message)',
+        rating: 1,
+      })
+    );
+    expect(typeof (fbUp.request.body as { response?: string }).response).toBe('string');
+    expect((fbUp.request.body as { response: string }).response.length).toBeGreaterThan(0);
+    fbUp.flush({});
+
     bot.messages.push({ content: 'u', isUser: true });
     bot.setBotFeedback(1, 'down');
     expect(bot.messages[1].feedback).toBeUndefined();
+    httpMock.verify();
+  });
+
+  it('should POST feedback with query, response, and rating after agent reply', () => {
+    const httpMock = TestBed.inject(HttpTestingController);
+    createHost();
+    hostFixture.detectChanges();
+    bot.messageInput = 'Explain HRA';
+    bot.handleSendMessage();
+    const agentReq = httpMock.expectOne(BIZZY_BOT_AGENT_QUERY_URL);
+    agentReq.flush({ response: 'HRA is…' });
+    hostFixture.detectChanges();
+    const botIdx = bot.messages.length - 1;
+    expect(bot.messages[botIdx].feedbackTurn?.query).toBe('Explain HRA');
+    bot.setBotFeedback(botIdx, 'up');
+    const fb = httpMock.expectOne(BIZZY_BOT_FEEDBACK_URL);
+    expect(fb.request.body).toEqual({
+      userId: 1,
+      query: 'Explain HRA',
+      response: 'HRA is…',
+      rating: 1,
+    });
+    fb.flush({});
+    bot.setBotFeedback(botIdx, 'down');
+    const fbDown = httpMock.expectOne(BIZZY_BOT_FEEDBACK_URL);
+    expect(fbDown.request.body.rating).toBe(0);
+    fbDown.flush({});
+    httpMock.verify();
   });
 
   it('fileUploadIconClass returns expected Font Awesome class', () => {
