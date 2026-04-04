@@ -411,6 +411,66 @@
     padding-right: 2.5rem;
     padding-bottom: 1.85rem;
   }
+
+  /* Assistant HTML replies; inner DOM bypasses encapsulation — style via ::ng-deep. */
+  .message-bubble__html {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .message-bubble__html ::ng-deep .fw-reply,
+  .message-bubble__html ::ng-deep article {
+    margin: 0;
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .message-bubble__html ::ng-deep .fw-section,
+  .message-bubble__html ::ng-deep section {
+    margin: 0 0 0.65rem;
+  }
+
+  .message-bubble__html ::ng-deep .fw-section:last-child,
+  .message-bubble__html ::ng-deep section:last-child {
+    margin-bottom: 0;
+  }
+
+  .message-bubble__html ::ng-deep .fw-heading,
+  .message-bubble__html ::ng-deep h1,
+  .message-bubble__html ::ng-deep h2,
+  .message-bubble__html ::ng-deep h3,
+  .message-bubble__html ::ng-deep h4 {
+    margin: 0 0 0.35rem;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.35;
+  }
+
+  .message-bubble__html ::ng-deep .fw-section:first-child .fw-heading,
+  .message-bubble__html ::ng-deep .fw-section:first-child h3 {
+    margin-top: 0;
+  }
+
+  .message-bubble__html ::ng-deep p {
+    margin: 0 0 0.4rem;
+  }
+
+  .message-bubble__html ::ng-deep p:last-child {
+    margin-bottom: 0;
+  }
+
+  .message-bubble__html ::ng-deep .fw-list,
+  .message-bubble__html ::ng-deep ul,
+  .message-bubble__html ::ng-deep ol {
+    margin: 0.25rem 0 0.5rem;
+    padding-left: 1.15rem;
+  }
+
+  .message-bubble__html ::ng-deep li {
+    margin: 0.2rem 0;
+  }
   
   .bubble-menu {
     position: absolute;

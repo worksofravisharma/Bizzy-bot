@@ -210,9 +210,25 @@
                 </a>
               </div>
             </ng-container>
+            <div
+              class="message-bubble__html"
+              *ngIf="
+                message.content?.trim() &&
+                !message.isUser &&
+                !message.fileUpload &&
+                !message.linkUrl &&
+                isLikelyBotHtml(message.content)
+              "
+              [innerHTML]="sanitizedBotHtml(message.content)"
+            ></div>
             <span
               class="message-bubble__text"
-              *ngIf="message.content?.trim() && !message.fileUpload && !message.linkUrl"
+              *ngIf="
+                message.content?.trim() &&
+                !message.fileUpload &&
+                !message.linkUrl &&
+                (message.isUser || !isLikelyBotHtml(message.content))
+              "
               >{{ message.content }}</span
             >
           </div>

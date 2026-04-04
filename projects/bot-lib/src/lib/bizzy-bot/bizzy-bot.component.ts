@@ -8,9 +8,12 @@ import {
   OnChanges,
   OnDestroy,
   OnInit,
+  SecurityContext,
   SimpleChanges,
   ViewChild,
 } from '@angular/core';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { take } from 'rxjs/operators';
 import {
   BIZZY_BOT_DEFAULT_WIDGET_CONFIG,
   BizzyBotThemeConfig,
@@ -163,7 +166,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
   constructor(
     private readonly ngZone: NgZone,
     private readonly host: ElementRef<HTMLElement>,
-    private readonly http: HttpClient
+    private readonly http: HttpClient,
+    private readonly sanitizer: DomSanitizer
   ) {
     this.voiceInputSupported = this.ensureSpeechRecognition();
   }
@@ -252,8 +256,8 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
       this.openBubbleMenuIndex = null;
     } else {
       this.runBackendPing();
+      this.scrollToBottom();
     }
-    setTimeout(() => this.scrollToBottom(), 0);
   }
 
   closeChat(): void {
@@ -583,6 +587,7 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
         step += 1;
         const progress = Math.min(maxSimulated, Math.round((step / steps) * maxSimulated));
         msg.fileUpload = { ...msg.fileUpload, progress };
+        this.flushScrollToBottom(false);
         if (progress >= maxSimulated) {
           return;
         }
@@ -688,7 +693,7 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
       }
       parts.push(message.linkUrl);
     }
-    const body = message.content?.trim() ?? '';
+    const body = this.messageBodyPlainText(message);
     if (body && (!message.linkUrl || body !== message.linkUrl)) {
       parts.push(body);
     }
@@ -932,11 +937,45 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
       }
       parts.push(message.linkUrl);
     }
-    const body = message.content?.trim() ?? '';
+    const body = this.messageBodyPlainText(message);
     if (body && (!message.linkUrl || body !== message.linkUrl)) {
       parts.push(body);
     }
-    return parts.join('\n').trim() || message.content?.trim() || '';
+    return parts.join('\n').trim() || this.messageBodyPlainText(message) || '';
+  }
+
+  /**
+   * Assistant replies may be HTML (e.g. structured financial wellness cards). Detect a small subset
+   * so plain text and markdown-like replies still use escaped text.
+   */
+  isLikelyBotHtml(content: string | undefined): boolean {
+    const t = content?.trim() ?? '';
+    if (t.length < 3) {
+      return false;
+    }
+    if (/^<[a-z][a-z0-9_-]*(\s|>)/i.test(t)) {
+      return true;
+    }
+    return /<\/[a-z][a-z0-9_-]*>/i.test(t);
+  }
+
+  /** Sanitized HTML for `[innerHTML]` (bot bubbles only). */
+  sanitizedBotHtml(content: string | undefined): SafeHtml {
+    const raw = content?.trim() ?? '';
+    const cleaned = this.sanitizer.sanitize(SecurityContext.HTML, raw) ?? '';
+    return this.sanitizer.bypassSecurityTrustHtml(cleaned);
+  }
+
+  /** Copy / feedback string when content is HTML. */
+  private messageBodyPlainText(message: ChatMessage): string {
+    const body = message.content?.trim() ?? '';
+    if (!body) {
+      return '';
+    }
+    if (!message.isUser && this.isLikelyBotHtml(body)) {
+      return body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    return body;
   }
 
   /** Normalize agent JSON (or plain text) into a single assistant bubble string. */
@@ -973,12 +1012,43 @@ export class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * Scroll after the view has caught up (messages, innerHTML, typing row). Sync `scrollTop` alone
+   * often runs before CD/layout, so it no-ops or stops short.
+   */
   private scrollToBottom(): void {
+    this.ngZone.onStable.pipe(take(1)).subscribe(() => this.flushScrollToBottom(true));
+  }
+
+  /**
+   * Scroll to the latest content. When `smooth`, uses `scrollTo({ behavior: 'smooth' })` and a late
+   * snap so layout (innerHTML, typing row) does not cancel the animation. Use `smooth: false` for
+   * frequent ticks (upload %) so the list tracks instantly.
+   */
+  private flushScrollToBottom(smooth = false): void {
     const container = this.chatContainer?.nativeElement;
     if (!container) {
       return;
     }
-    container.scrollTop = container.scrollHeight;
+    const snap = (): void => {
+      container.scrollTop = container.scrollHeight;
+    };
+    if (smooth) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      // Do not snap on the next animation frames — that aborts smooth scrolling. One delayed snap
+      // catches height changes after paint.
+      this.ngZone.runOutsideAngular(() => {
+        window.setTimeout(() => snap(), 420);
+      });
+    } else {
+      snap();
+      this.ngZone.runOutsideAngular(() => {
+        requestAnimationFrame(() => {
+          snap();
+          requestAnimationFrame(() => snap());
+        });
+      });
+    }
   }
 
   private flushSpeechToInput(): void {
