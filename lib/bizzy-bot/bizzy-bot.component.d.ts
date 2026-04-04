@@ -1,5 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { ElementRef, NgZone, OnChanges, OnDestroy, OnInit, SimpleChanges } from '@angular/core';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { BizzyBotWidgetConfig } from '../config/bizzy-bot-widget-config';
 import * as i0 from "@angular/core";
 /** Hardcoded user id until auth is wired. */
@@ -50,6 +51,7 @@ export declare class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     private readonly ngZone;
     private readonly host;
     private readonly http;
+    private readonly sanitizer;
     private static readonly SESSION_ACCESS_TOKEN_KEY;
     /** JSON string or object: merged over {@link BIZZY_BOT_DEFAULT_WIDGET_CONFIG} (see `bizzy-bot-default.config.json`). */
     config: string | BizzyBotWidgetConfig | null | undefined;
@@ -96,7 +98,7 @@ export declare class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     messages: ChatMessage[];
     chatContainer?: ElementRef<HTMLDivElement>;
     fileInputEl?: ElementRef<HTMLInputElement>;
-    constructor(ngZone: NgZone, host: ElementRef<HTMLElement>, http: HttpClient);
+    constructor(ngZone: NgZone, host: ElementRef<HTMLElement>, http: HttpClient, sanitizer: DomSanitizer);
     ngOnInit(): void;
     ngOnChanges(changes: SimpleChanges): void;
     /** Brand + tagline + logos from merged config. */
@@ -180,9 +182,28 @@ export declare class BizzyBotComponent implements OnInit, OnChanges, OnDestroy {
     private inferFeedbackQueryFromPriorMessages;
     /** Plain text for feedback `response` (link cards, etc.). */
     private botMessageFeedbackResponseText;
+    /**
+     * Assistant replies may be HTML (e.g. structured financial wellness cards). Detect a small subset
+     * so plain text and markdown-like replies still use escaped text.
+     */
+    isLikelyBotHtml(content: string | undefined): boolean;
+    /** Sanitized HTML for `[innerHTML]` (bot bubbles only). */
+    sanitizedBotHtml(content: string | undefined): SafeHtml;
+    /** Copy / feedback string when content is HTML. */
+    private messageBodyPlainText;
     /** Normalize agent JSON (or plain text) into a single assistant bubble string. */
     private extractAgentReplyText;
+    /**
+     * Scroll after the view has caught up (messages, innerHTML, typing row). Sync `scrollTop` alone
+     * often runs before CD/layout, so it no-ops or stops short.
+     */
     private scrollToBottom;
+    /**
+     * Scroll to the latest content. When `smooth`, uses `scrollTo({ behavior: 'smooth' })` and a late
+     * snap so layout (innerHTML, typing row) does not cancel the animation. Use `smooth: false` for
+     * frequent ticks (upload %) so the list tracks instantly.
+     */
+    private flushScrollToBottom;
     private flushSpeechToInput;
     private ensureSpeechRecognition;
     ngOnDestroy(): void;
